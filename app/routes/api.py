@@ -1,0 +1,233 @@
+import json
+import logging
+from datetime import datetime
+from typing import Optional
+
+from fastapi import APIRouter, Request, HTTPException
+from pydantic import BaseModel
+
+from ..models import PostfixBounce, HealthResponse
+from ..services.suppression import process_bounce
+from ..services.postal import postal_client
+from ..services.chatwoot import chatwoot_client
+from ..utils.conv_id import extract_conv_id
+from .. import database
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/v1", tags=["api"])
+
+
+@router.get("/health", response_model=HealthResponse)
+async def health_check():
+    """Health check endpoint."""
+    db_ok = await database.check_db()
+
+    return HealthResponse(
+        status="ok" if db_ok else "degraded",
+        version="1.0.0",
+        postal_configured=postal_client.is_configured(),
+        chatwoot_configured=chatwoot_client.is_configured(),
+        database_ok=db_ok,
+    )
+
+
+@router.post("/ses-bounce")
+async def ses_bounce(request: Request):
+    """
+    Receive SES bounce/complaint notification from n8n.
+
+    Expected payload: Full SES SNS JSON as forwarded by n8n.
+    """
+    try:
+        payload = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
+
+    logger.info(f"Received SES bounce notification")
+
+    # Parse SES notification
+    # SNS wraps the message, n8n may unwrap it
+    message = payload
+    if isinstance(payload.get("Message"), str):
+        message = json.loads(payload["Message"])
+
+    notification_type = message.get("notificationType", message.get("eventType", ""))
+
+    if notification_type == "Bounce":
+        bounce_data = message.get("bounce", {})
+        bounce_type = bounce_data.get("bounceType", "Permanent")
+        event_type = "hard_bounce" if bounce_type == "Permanent" else "soft_bounce"
+
+        recipients = bounce_data.get("bouncedRecipients", [])
+        mail_data = message.get("mail", {})
+
+        # Extract common headers
+        headers = {}
+        for h in mail_data.get("headers", []):
+            headers[h.get("name", "")] = h.get("value", "")
+
+        sender = mail_data.get("source", "")
+        subject = headers.get("Subject", "")
+
+        # Extract conversation ID
+        conv_info = extract_conv_id(headers=headers)
+        account_id = conv_info[0] if conv_info else None
+        conv_id = conv_info[1] if conv_info else None
+
+        for recipient in recipients:
+            email = recipient.get("emailAddress", "")
+            reason = recipient.get("diagnosticCode", bounce_data.get("bounceSubType", ""))
+
+            await process_bounce(
+                source="ses",
+                event_type=event_type,
+                recipient=email,
+                sender=sender,
+                subject=subject,
+                reason=reason,
+                account_id=account_id,
+                conv_id=conv_id,
+                raw_payload=json.dumps(payload),
+            )
+
+    elif notification_type == "Complaint":
+        complaint_data = message.get("complaint", {})
+        recipients = complaint_data.get("complainedRecipients", [])
+        mail_data = message.get("mail", {})
+
+        headers = {}
+        for h in mail_data.get("headers", []):
+            headers[h.get("name", "")] = h.get("value", "")
+
+        sender = mail_data.get("source", "")
+        subject = headers.get("Subject", "")
+
+        conv_info = extract_conv_id(headers=headers)
+        account_id = conv_info[0] if conv_info else None
+        conv_id = conv_info[1] if conv_info else None
+
+        for recipient in recipients:
+            email = recipient.get("emailAddress", "")
+            reason = complaint_data.get("complaintFeedbackType", "abuse")
+
+            await process_bounce(
+                source="ses",
+                event_type="complaint",
+                recipient=email,
+                sender=sender,
+                subject=subject,
+                reason=f"Complaint: {reason}",
+                account_id=account_id,
+                conv_id=conv_id,
+                raw_payload=json.dumps(payload),
+            )
+
+    return {"status": "ok", "message": f"Processed {notification_type}"}
+
+
+@router.post("/postal-bounce")
+async def postal_bounce(request: Request):
+    """
+    Receive Postal MessageBounced webhook.
+
+    Must fetch original message headers from Postal API to extract conv ID.
+    """
+    try:
+        payload = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
+
+    logger.info(f"Received Postal bounce webhook")
+
+    # Postal webhook payload structure
+    event = payload.get("event", "")
+    message_data = payload.get("payload", payload)
+
+    if event not in ("MessageBounced", "MessageDeliveryFailed"):
+        return {"status": "ignored", "message": f"Event {event} not handled"}
+
+    recipient = message_data.get("rcpt_to", message_data.get("to", ""))
+    sender = message_data.get("mail_from", message_data.get("from", ""))
+    subject = message_data.get("subject", "")
+    message_id = message_data.get("id", message_data.get("message_id"))
+    reason = message_data.get("details", message_data.get("output", ""))
+
+    # Try to get original message headers for conv ID
+    account_id = None
+    conv_id = None
+    html_body = None
+
+    if message_id:
+        msg_details = await postal_client.get_message(message_id)
+        if msg_details:
+            headers = msg_details.get("headers", {})
+            html_body = msg_details.get("html_body", "")
+
+            conv_info = extract_conv_id(headers=headers, html_body=html_body)
+            if conv_info:
+                account_id, conv_id = conv_info
+
+    await process_bounce(
+        source="postal",
+        event_type="hard_bounce",
+        recipient=recipient,
+        sender=sender,
+        subject=subject,
+        reason=reason,
+        account_id=account_id,
+        conv_id=conv_id,
+        raw_payload=json.dumps(payload),
+    )
+
+    return {"status": "ok", "message": "Postal bounce processed"}
+
+
+@router.post("/postfix-bounce")
+async def postfix_bounce(request: Request):
+    """
+    Receive Postfix DSN bounce notification.
+
+    Payload:
+    {
+        "from": "sender@example.com",
+        "to": "recipient@example.com",
+        "subject": "...",
+        "dsn": "5.1.1",
+        "status": "bounced",
+        "reason": "full bounce reason text",
+        "relay": "mail.example.com",
+        "timestamp": "2026-03-21T10:00:00Z"
+    }
+    """
+    try:
+        payload = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
+
+    logger.info(f"Received Postfix bounce notification")
+
+    # Parse the bounce
+    bounce = PostfixBounce(**payload)
+
+    # Determine event type from DSN code
+    dsn = bounce.dsn or ""
+    if dsn.startswith("5"):
+        event_type = "hard_bounce"
+    elif dsn.startswith("4"):
+        event_type = "soft_bounce"
+    else:
+        event_type = "hard_bounce"  # Default to hard
+
+    await process_bounce(
+        source="postfix",
+        event_type=event_type,
+        recipient=bounce.to,
+        sender=bounce.from_addr,
+        subject=bounce.subject,
+        reason=bounce.reason,
+        raw_payload=json.dumps(payload),
+        timestamp=bounce.timestamp,
+    )
+
+    return {"status": "ok", "message": "Postfix bounce processed"}

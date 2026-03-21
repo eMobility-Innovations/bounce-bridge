@@ -1,0 +1,29 @@
+# Bounce Bridge Configuration
+# Settings can be edited via the web UI
+
+postal:
+  api_url: "https://postal.voltnation.pl"
+  api_key: ""  # Set via .env or UI
+
+chatwoot:
+  api_url: "https://chatwoot.fiszu.com"
+  api_token: ""  # Set via .env or UI
+
+notifications:
+  sender_email: "bounce-bridge@fiszu.com"
+  enable_suppression: true
+  enable_sender_notify: true
+  enable_chatwoot_note: true
+
+access:
+  allowed_users:
+    - "sysadmin"
+    - "Dev"
+
+expiry:
+  ses_permanent: 365
+  ses_transient: 30
+  ses_complaint: 180
+  postal_bounce: 30
+  postfix_hard: 365
+  postfix_soft: 30

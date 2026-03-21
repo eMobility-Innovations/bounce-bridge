@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Bounce Bridge{% endblock %}
+{% block content %}
+<div class="stats-grid">
+    <div class="stat-card">
+        <h3>Total Bounces</h3>
+        <div class="value">{{ stats.total or 0 }}</div>
+    </div>
+    <div class="stat-card">
+        <h3>Suppressed</h3>
+        <div class="value">{{ stats.suppressed or 0 }}</div>
+    </div>
+    <div class="stat-card">
+        <h3>Hard Bounces</h3>
+        <div class="value">{{ stats.by_type.get('hard_bounce', 0) }}</div>
+    </div>
+    <div class="stat-card">
+        <h3>Soft Bounces</h3>
+        <div class="value">{{ stats.by_type.get('soft_bounce', 0) }}</div>
+    </div>
+    <div class="stat-card">
+        <h3>Complaints</h3>
+        <div class="value">{{ stats.by_type.get('complaint', 0) }}</div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Recent Bounces (Last 100)</h2>
+    {% if bounces %}
+    <table>
+        <thead>
+            <tr>
+                <th>Time</th>
+                <th>Recipient</th>
+                <th>Type</th>
+                <th>Source</th>
+                <th>Conv ID</th>
+                <th>Suppressed</th>
+                <th>Notified</th>
+                <th>Chatwoot</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for bounce in bounces %}
+            <tr>
+                <td>{{ bounce.timestamp[:19] }}</td>
+                <td class="truncate" title="{{ bounce.recipient }}">{{ bounce.recipient }}</td>
+                <td>
+                    {% if bounce.event_type == 'hard_bounce' %}
+                    <span class="badge badge-red">Hard Bounce</span>
+                    {% elif bounce.event_type == 'soft_bounce' %}
+                    <span class="badge badge-yellow">Soft Bounce</span>
+                    {% elif bounce.event_type == 'complaint' %}
+                    <span class="badge badge-red">Complaint</span>
+                    {% else %}
+                    <span class="badge badge-gray">{{ bounce.event_type }}</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if bounce.source == 'ses' %}
+                    <span class="badge badge-blue">SES</span>
+                    {% elif bounce.source == 'postal' %}
+                    <span class="badge badge-green">Postal</span>
+                    {% elif bounce.source == 'postfix' %}
+                    <span class="badge badge-gray">Postfix</span>
+                    {% else %}
+                    <span class="badge badge-gray">{{ bounce.source }}</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if bounce.conv_id %}
+                    <span class="badge badge-blue">{{ bounce.account_id }}:{{ bounce.conv_id }}</span>
+                    {% else %}
+                    <span class="badge badge-gray">-</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if bounce.postal_suppressed %}
+                    <span class="badge badge-green">Yes</span>
+                    {% else %}
+                    <span class="badge badge-gray">No</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if bounce.sender_notified %}
+                    <span class="badge badge-green">Yes</span>
+                    {% else %}
+                    <span class="badge badge-gray">No</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if bounce.chatwoot_notified %}
+                    <span class="badge badge-green">Yes</span>
+                    {% else %}
+                    <span class="badge badge-gray">No</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p>No bounces recorded yet.</p>
+    {% endif %}
+</div>
+{% endblock %}

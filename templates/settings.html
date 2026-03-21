@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Settings - Bounce Bridge{% endblock %}
+{% block content %}
+{% if request.query_params.get('saved') %}
+<div class="alert alert-success">Settings saved successfully!</div>
+{% endif %}
+
+<div class="card">
+    <h2>Settings</h2>
+    <form method="POST" action="/settings">
+        <div class="form-group">
+            <label for="allowed_users">Allowed SSO Users (comma separated)</label>
+            <input type="text" id="allowed_users" name="allowed_users"
+                   value="{{ config.access.allowed_users | join(', ') if config.access else 'sysadmin, Dev' }}">
+            <small>Users or groups that can access this dashboard</small>
+        </div>
+
+        <div class="form-group">
+            <label for="postal_api_key">Postal API Key</label>
+            <input type="password" id="postal_api_key" name="postal_api_key"
+                   value="{{ config.postal.api_key if config.postal else '' }}"
+                   placeholder="Leave blank to keep current">
+        </div>
+
+        <div class="form-group">
+            <label for="chatwoot_api_token">Chatwoot API Token</label>
+            <input type="password" id="chatwoot_api_token" name="chatwoot_api_token"
+                   value="{{ config.chatwoot.api_token if config.chatwoot else '' }}"
+                   placeholder="Leave blank to keep current">
+        </div>
+
+        <div class="form-group">
+            <label for="sender_email">Bounce Notification Sender Email</label>
+            <input type="text" id="sender_email" name="sender_email"
+                   value="{{ config.notifications.sender_email if config.notifications else 'bounce-bridge@fiszu.com' }}">
+        </div>
+
+        <div class="form-group">
+            <h3 style="margin-bottom: 0.5rem;">Actions</h3>
+            <div class="checkbox-group">
+                <input type="checkbox" id="enable_suppression" name="enable_suppression" value="true"
+                       {% if config.notifications.enable_suppression is not defined or config.notifications.enable_suppression %}checked{% endif %}>
+                <label for="enable_suppression">Add bounced addresses to suppression list</label>
+            </div>
+            <div class="checkbox-group">
+                <input type="checkbox" id="enable_sender_notify" name="enable_sender_notify" value="true"
+                       {% if config.notifications.enable_sender_notify is not defined or config.notifications.enable_sender_notify %}checked{% endif %}>
+                <label for="enable_sender_notify">Send bounce notification email to original sender</label>
+            </div>
+            <div class="checkbox-group">
+                <input type="checkbox" id="enable_chatwoot_note" name="enable_chatwoot_note" value="true"
+                       {% if config.notifications.enable_chatwoot_note is not defined or config.notifications.enable_chatwoot_note %}checked{% endif %}>
+                <label for="enable_chatwoot_note">Add private note to Chatwoot conversation</label>
+            </div>
+        </div>
+
+        <button type="submit" class="btn">Save Settings</button>
+    </form>
+</div>
+
+<div class="card">
+    <h2>Webhook URLs</h2>
+    <p>Configure these URLs in your notification sources:</p>
+    <table>
+        <tr>
+            <th>Source</th>
+            <th>Webhook URL</th>
+        </tr>
+        <tr>
+            <td>AWS SES (via n8n)</td>
+            <td><code>https://bounce-bridge.fiszu.com/api/v1/ses-bounce</code></td>
+        </tr>
+        <tr>
+            <td>Postal</td>
+            <td><code>https://bounce-bridge.fiszu.com/api/v1/postal-bounce</code></td>
+        </tr>
+        <tr>
+            <td>Postfix</td>
+            <td><code>http://192.168.103.176:8000/api/v1/postfix-bounce</code></td>
+        </tr>
+    </table>
+</div>
+
+<div class="card">
+    <h2>Suppression Expiry</h2>
+    <table>
+        <tr><th>Source</th><th>Type</th><th>Expiry</th></tr>
+        <tr><td>AWS SES</td><td>Permanent Bounce</td><td>365 days</td></tr>
+        <tr><td>AWS SES</td><td>Transient Bounce</td><td>30 days</td></tr>
+        <tr><td>AWS SES</td><td>Complaint</td><td>180 days</td></tr>
+        <tr><td>Postal</td><td>Any Bounce</td><td>30 days</td></tr>
+        <tr><td>Postfix</td><td>Hard (5.x.x)</td><td>365 days</td></tr>
+        <tr><td>Postfix</td><td>Soft (4.x.x)</td><td>30 days</td></tr>
+    </table>
+</div>
+{% endblock %}
