@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% block title %}Access Denied - Bounce Bridge{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width: 500px; margin: 4rem auto; text-align: center;">
+    <div style="font-size: 4rem; margin-bottom: 1rem;">&#128683;</div>
+    <h2>Access Denied</h2>
+    <p style="margin: 1rem 0; color: #6b7280;">
+        {% if user %}
+        You are logged in as <strong>{{ user.preferred_username }}</strong>, but you do not have permission to access this application.
+        {% else %}
+        You do not have permission to access this application.
+        {% endif %}
+    </p>
+    <p style="margin-top: 1.5rem;">
+        <a href="/auth/logout" class="btn" style="background: #6b7280;">Logout</a>
+    </p>
+</div>
+{% endblock %}

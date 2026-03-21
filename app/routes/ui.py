@@ -1,11 +1,12 @@
 import logging
-from fastapi import APIRouter, Request, Form, HTTPException
+from fastapi import APIRouter, Request, Form, HTTPException, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from ..config import get_config, save_config, load_config, BASE_DIR
 from ..models import SettingsUpdate
 from .. import database
+from ..auth import require_auth, get_current_user, is_authenticated, is_user_allowed, KEYCLOAK_CLIENT_SECRET
 
 logger = logging.getLogger(__name__)
 
@@ -13,37 +14,19 @@ router = APIRouter(tags=["ui"])
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 
-def check_access(request: Request) -> bool:
-    """Check if user has access based on SSO headers."""
-    config = get_config()
-    allowed_users = config.get("access", {}).get("allowed_users", ["sysadmin", "Dev"])
-
-    # Get user from ForwardAuth headers
-    user = request.headers.get("X-Forwarded-User", "")
-    groups = request.headers.get("X-Forwarded-Groups", "")
-
-    if not user:
-        # No auth header = probably direct access, allow for dev
-        return True
-
-    # Check if user or any group is allowed
-    user_groups = [g.strip() for g in groups.split(",") if g.strip()]
-
-    for allowed in allowed_users:
-        if user == allowed or allowed in user_groups:
-            return True
-
-    return False
-
-
 @router.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     """Main dashboard showing recent bounces."""
-    if not check_access(request):
-        raise HTTPException(status_code=403, detail="Access denied")
+    # Check auth if SSO is enabled
+    if KEYCLOAK_CLIENT_SECRET:
+        if not is_authenticated(request):
+            return RedirectResponse(url="/auth/login")
+        if not is_user_allowed(request):
+            return RedirectResponse(url="/auth/forbidden")
 
     bounces = await database.get_recent_bounces(100)
     stats = await database.get_stats()
+    user = get_current_user(request)
 
     return templates.TemplateResponse(
         "dashboard.html",
@@ -51,7 +34,7 @@ async def dashboard(request: Request):
             "request": request,
             "bounces": bounces,
             "stats": stats,
-            "user": request.headers.get("X-Forwarded-User", ""),
+            "user": user.get("preferred_username", "") if user else "",
         },
     )
 
@@ -59,17 +42,21 @@ async def dashboard(request: Request):
 @router.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
     """Settings page."""
-    if not check_access(request):
-        raise HTTPException(status_code=403, detail="Access denied")
+    if KEYCLOAK_CLIENT_SECRET:
+        if not is_authenticated(request):
+            return RedirectResponse(url="/auth/login")
+        if not is_user_allowed(request):
+            return RedirectResponse(url="/auth/forbidden")
 
     config = get_config()
+    user = get_current_user(request)
 
     return templates.TemplateResponse(
         "settings.html",
         {
             "request": request,
             "config": config,
-            "user": request.headers.get("X-Forwarded-User", ""),
+            "user": user.get("preferred_username", "") if user else "",
         },
     )
 
@@ -86,8 +73,11 @@ async def save_settings(
     enable_chatwoot_note: bool = Form(False),
 ):
     """Save settings from form."""
-    if not check_access(request):
-        raise HTTPException(status_code=403, detail="Access denied")
+    if KEYCLOAK_CLIENT_SECRET:
+        if not is_authenticated(request):
+            return RedirectResponse(url="/auth/login")
+        if not is_user_allowed(request):
+            raise HTTPException(status_code=403, detail="Access denied")
 
     config = load_config()
 

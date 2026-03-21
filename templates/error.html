@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block title %}Error - Bounce Bridge{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width: 500px; margin: 4rem auto; text-align: center;">
+    <div style="font-size: 4rem; margin-bottom: 1rem;">&#9888;&#65039;</div>
+    <h2>Error</h2>
+    <p style="margin: 1rem 0; color: #6b7280;">
+        {{ message or "An unexpected error occurred." }}
+    </p>
+    <p style="margin-top: 1.5rem;">
+        <a href="/" class="btn">Go to Dashboard</a>
+        <a href="/auth/login" class="btn" style="background: #6b7280; margin-left: 0.5rem;">Try Login Again</a>
+    </p>
+</div>
+{% endblock %}

@@ -4,9 +4,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from .routes import api, ui
+from .routes import api, ui, auth
 from . import database
 from .config import BASE_DIR
+from .auth import setup_oauth
 
 # Configure logging
 logging.basicConfig(
@@ -35,8 +36,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Setup OAuth (must be before routes)
+setup_oauth(app)
+
 # Include routers
 app.include_router(api.router)
+app.include_router(auth.router)
 app.include_router(ui.router)
 
 

@@ -139,7 +139,7 @@
             <nav>
                 <a href="/">Dashboard</a>
                 <a href="/settings">Settings</a>
-                {% if user %}<span class="user-info">{{ user }}</span>{% endif %}
+                {% if user %}<span class="user-info">{{ user }}</span><a href="/auth/logout">Logout</a>{% endif %}
             </nav>
         </div>
     </header>
