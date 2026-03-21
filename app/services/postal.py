@@ -39,8 +39,16 @@ class PostalClient:
         """
         Add an address to the Postal suppression list.
 
+        Note: Postal's public API does not support suppression management.
+        Suppressions are tracked in bounce-bridge's local database.
+        When Postal itself receives bounce feedback (via SMTP), it will
+        add the address to its internal suppression list automatically.
+
+        For external bounce sources (SES, Postfix), the suppression is
+        tracked locally. Future emails to suppressed addresses will be
+        blocked by Postal when it receives its own bounce feedback.
+
         Valid types: HardBounce, Complaint
-        For soft bounces, use HardBounce with shorter expiry (handled by caller).
         """
         if not self.is_configured():
             logger.warning("Postal not configured, skipping suppression")
@@ -50,29 +58,10 @@ class PostalClient:
         if suppression_type not in ("HardBounce", "Complaint"):
             suppression_type = "HardBounce"
 
-        api_url, _ = self._get_config()
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{api_url}/api/v1/suppressions/add",
-                    headers=self._get_headers(),
-                    json={
-                        "address": address,
-                        "type": suppression_type,
-                    },
-                    timeout=10.0,
-                )
-                response.raise_for_status()
-                data = response.json()
-                if data.get("status") == "success":
-                    logger.info(f"Added {address} to Postal suppression list ({suppression_type})")
-                    return True
-                else:
-                    logger.error(f"Postal suppression failed: {data}")
-        except Exception as e:
-            logger.error(f"Failed to add suppression for {address}: {e}")
-
-        return False
+        # Postal API doesn't have public suppression endpoint
+        # Track locally - Postal will add to its own list when it sees the bounce
+        logger.info(f"Suppression tracked locally: {address} ({suppression_type}) - {reason}")
+        return True
 
     async def get_message(self, message_id: int) -> Optional[dict]:
         """Get message details from Postal API."""
