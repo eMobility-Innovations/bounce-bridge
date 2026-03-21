@@ -39,6 +39,9 @@ app = FastAPI(
 # Setup OAuth (must be before routes)
 setup_oauth(app)
 
+# Mount static files
+app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+
 # Include routers
 app.include_router(api.router)
 app.include_router(auth.router)
