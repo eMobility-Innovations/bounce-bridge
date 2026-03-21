@@ -19,7 +19,11 @@ async def login(request: Request):
     if not KEYCLOAK_CLIENT_SECRET:
         return RedirectResponse(url="/")
 
+    # Build redirect URI with https (app is behind reverse proxy)
     redirect_uri = str(request.url_for("auth_callback"))
+    if redirect_uri.startswith("http://"):
+        redirect_uri = redirect_uri.replace("http://", "https://", 1)
+
     return await oauth.keycloak.authorize_redirect(request, redirect_uri)
 
 
