@@ -1,15 +1,44 @@
-import httpx
+import os
+import time
 import logging
 from typing import Optional
-from datetime import datetime, timedelta
+
+import httpx
+import pymysql
 
 from ..config import get_config
 
 logger = logging.getLogger(__name__)
 
+# Postal MariaDB connection settings
+POSTAL_DB_HOST = os.environ.get("POSTAL_DB_HOST", "192.168.103.200")
+POSTAL_DB_PORT = int(os.environ.get("POSTAL_DB_PORT", "3306"))
+POSTAL_DB_USER = os.environ.get("POSTAL_DB_USER", "root")
+POSTAL_DB_PASSWORD = os.environ.get("POSTAL_DB_PASSWORD", "postal")
+POSTAL_DB_NAME = os.environ.get("POSTAL_DB_NAME", "postal-server-1")
+
+# Suppression durations by type (days)
+SUPPRESSION_DAYS = {
+    "HardBounce": 365,
+    "Complaint": 180,
+}
+
+
+def _get_postal_db():
+    """Get a connection to Postal's MariaDB."""
+    return pymysql.connect(
+        host=POSTAL_DB_HOST,
+        port=POSTAL_DB_PORT,
+        user=POSTAL_DB_USER,
+        password=POSTAL_DB_PASSWORD,
+        database=POSTAL_DB_NAME,
+        cursorclass=pymysql.cursors.DictCursor,
+        connect_timeout=10,
+    )
+
 
 class PostalClient:
-    """Client for Postal API with dynamic config reload."""
+    """Client for Postal with direct MariaDB suppression management."""
 
     def _get_config(self) -> tuple:
         """Get current config values (reloads on each call)."""
@@ -36,32 +65,53 @@ class PostalClient:
         suppression_type: str = "HardBounce",
         reason: str = "Bounce Bridge",
     ) -> bool:
-        """
-        Add an address to the Postal suppression list.
-
-        Note: Postal's public API does not support suppression management.
-        Suppressions are tracked in bounce-bridge's local database.
-        When Postal itself receives bounce feedback (via SMTP), it will
-        add the address to its internal suppression list automatically.
-
-        For external bounce sources (SES, Postfix), the suppression is
-        tracked locally. Future emails to suppressed addresses will be
-        blocked by Postal when it receives its own bounce feedback.
+        """Add an address to Postal's suppression list via direct MariaDB insert.
 
         Valid types: HardBounce, Complaint
         """
-        if not self.is_configured():
-            logger.warning("Postal not configured, skipping suppression")
-            return False
-
-        # Normalize suppression type
         if suppression_type not in ("HardBounce", "Complaint"):
             suppression_type = "HardBounce"
 
-        # Postal API doesn't have public suppression endpoint
-        # Track locally - Postal will add to its own list when it sees the bounce
-        logger.info(f"Suppression tracked locally: {address} ({suppression_type}) - {reason}")
-        return True
+        now = time.time()
+        days = SUPPRESSION_DAYS.get(suppression_type, 365)
+        keep_until = now + (days * 86400)
+
+        try:
+            conn = _get_postal_db()
+            cursor = conn.cursor()
+
+            # Check if suppression already exists for this address + type
+            cursor.execute(
+                "SELECT id, keep_until FROM suppressions WHERE address = %s AND type = %s",
+                (address, suppression_type),
+            )
+            existing = cursor.fetchone()
+
+            if existing:
+                if keep_until > float(existing["keep_until"]):
+                    cursor.execute(
+                        "UPDATE suppressions SET keep_until = %s, reason = %s, timestamp = %s WHERE id = %s",
+                        (keep_until, reason, now, existing["id"]),
+                    )
+                    conn.commit()
+                    logger.info(f"Updated suppression for {address} ({suppression_type}), extended to {days}d")
+                else:
+                    logger.info(f"Suppression already exists for {address} ({suppression_type}), no update needed")
+            else:
+                cursor.execute(
+                    "INSERT INTO suppressions (type, address, reason, timestamp, keep_until) "
+                    "VALUES (%s, %s, %s, %s, %s)",
+                    (suppression_type, address, reason, now, keep_until),
+                )
+                conn.commit()
+                logger.info(f"Added suppression for {address} ({suppression_type}) for {days} days")
+
+            conn.close()
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to add suppression for {address}: {e}")
+            return False
 
     async def get_message(self, message_id: int) -> Optional[dict]:
         """Get message details from Postal API."""
