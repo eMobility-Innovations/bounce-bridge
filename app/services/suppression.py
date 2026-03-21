@@ -45,18 +45,27 @@ async def process_bounce(
     conv_id: Optional[str] = None,
     raw_payload: Optional[str] = None,
     timestamp: Optional[str] = None,
-) -> BounceRecord:
+) -> Optional[BounceRecord]:
     """
     Process a bounce event:
-    1. Calculate expiry
-    2. Save to database
-    3. Suppress in Postal
-    4. Send notification email
-    5. Add Chatwoot note (if conv_id present)
+    1. Check for duplicate (same recipient in last 24h)
+    2. Calculate expiry
+    3. Save to database
+    4. Suppress in Postal
+    5. Send notification email
+    6. Add Chatwoot note (if conv_id present)
+
+    Returns None if duplicate found (skipped).
     """
     config = get_config()
     ts = timestamp or datetime.utcnow().isoformat()
     expiry_days = get_expiry_days(source, event_type)
+
+    # Check for duplicate bounce in last 24 hours
+    existing = await database.find_recent_bounce(recipient, hours=24)
+    if existing:
+        logger.info(f"Duplicate bounce for {recipient} (existing ID: {existing['id']}), skipping")
+        return None
 
     # Create record
     record = BounceRecord(

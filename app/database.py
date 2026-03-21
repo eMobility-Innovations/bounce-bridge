@@ -155,3 +155,24 @@ async def check_db() -> bool:
             return True
     except Exception:
         return False
+
+
+async def find_recent_bounce(recipient: str, hours: int = 24) -> Optional[dict]:
+    """
+    Find a recent bounce for the same recipient within the last N hours.
+    Returns the bounce record if found, None otherwise.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT * FROM bounces
+            WHERE recipient = ?
+            AND datetime(timestamp) > datetime('now', ?)
+            ORDER BY timestamp DESC
+            LIMIT 1
+            """,
+            (recipient, f"-{hours} hours"),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None

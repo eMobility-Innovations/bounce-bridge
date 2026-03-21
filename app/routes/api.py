@@ -1,5 +1,6 @@
 import json
 import logging
+import httpx
 from datetime import datetime
 from typing import Optional
 
@@ -35,14 +36,32 @@ async def health_check():
 @router.post("/ses-bounce")
 async def ses_bounce(request: Request):
     """
-    Receive SES bounce/complaint notification from n8n.
+    Receive SES bounce/complaint notification from n8n or direct SNS.
 
     Expected payload: Full SES SNS JSON as forwarded by n8n.
+    Also handles SNS SubscriptionConfirmation requests.
     """
     try:
         payload = await request.json()
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
+
+    # Handle SNS SubscriptionConfirmation
+    if payload.get("Type") == "SubscriptionConfirmation":
+        subscribe_url = payload.get("SubscribeURL")
+        if subscribe_url:
+            logger.info(f"Confirming SNS subscription: {subscribe_url}")
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(subscribe_url, timeout=10.0)
+                    if response.status_code == 200:
+                        logger.info("SNS subscription confirmed successfully")
+                        return {"status": "ok", "message": "Subscription confirmed"}
+                    else:
+                        logger.error(f"SNS confirmation failed: {response.status_code}")
+            except Exception as e:
+                logger.error(f"SNS confirmation error: {e}")
+        return {"status": "ok", "message": "SubscriptionConfirmation handled"}
 
     logger.info(f"Received SES bounce notification")
 

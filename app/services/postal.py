@@ -9,22 +9,26 @@ logger = logging.getLogger(__name__)
 
 
 class PostalClient:
-    """Client for Postal API."""
+    """Client for Postal API with dynamic config reload."""
 
-    def __init__(self):
+    def _get_config(self) -> tuple:
+        """Get current config values (reloads on each call)."""
         config = get_config()
-        self.api_url = config.get("postal", {}).get("api_url", "https://postal.voltnation.pl")
-        self.api_key = config.get("postal", {}).get("api_key", "")
+        api_url = config.get("postal", {}).get("api_url", "https://postal.voltnation.pl")
+        api_key = config.get("postal", {}).get("api_key", "")
+        return api_url, api_key
 
     def _get_headers(self) -> dict:
+        api_url, api_key = self._get_config()
         return {
-            "X-Server-API-Key": self.api_key,
+            "X-Server-API-Key": api_key,
             "Content-Type": "application/json",
-            "Host": self.api_url.replace("https://", "").replace("http://", ""),
+            "Host": api_url.replace("https://", "").replace("http://", ""),
         }
 
     def is_configured(self) -> bool:
-        return bool(self.api_key)
+        _, api_key = self._get_config()
+        return bool(api_key)
 
     async def add_suppression(
         self,
@@ -35,31 +39,51 @@ class PostalClient:
         """
         Add an address to the Postal suppression list.
 
-        Note: Postal's API doesn't have a direct suppression endpoint,
-        so we insert directly into the database via the webhook or
-        let Postal handle it naturally. This method is for documentation.
-
-        For now, we'll use the internal database approach.
+        Valid types: HardBounce, Complaint
+        For soft bounces, use HardBounce with shorter expiry (handled by caller).
         """
         if not self.is_configured():
             logger.warning("Postal not configured, skipping suppression")
             return False
 
-        # Postal doesn't have a public suppression API endpoint
-        # Suppressions are managed internally when bounces occur
-        # We track this in our own database
-        logger.info(f"Suppression tracked for {address} ({suppression_type})")
-        return True
+        # Normalize suppression type
+        if suppression_type not in ("HardBounce", "Complaint"):
+            suppression_type = "HardBounce"
+
+        api_url, _ = self._get_config()
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{api_url}/api/v1/suppressions/add",
+                    headers=self._get_headers(),
+                    json={
+                        "address": address,
+                        "type": suppression_type,
+                    },
+                    timeout=10.0,
+                )
+                response.raise_for_status()
+                data = response.json()
+                if data.get("status") == "success":
+                    logger.info(f"Added {address} to Postal suppression list ({suppression_type})")
+                    return True
+                else:
+                    logger.error(f"Postal suppression failed: {data}")
+        except Exception as e:
+            logger.error(f"Failed to add suppression for {address}: {e}")
+
+        return False
 
     async def get_message(self, message_id: int) -> Optional[dict]:
         """Get message details from Postal API."""
         if not self.is_configured():
             return None
 
+        api_url, _ = self._get_config()
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    f"{self.api_url}/api/v1/messages/message",
+                    f"{api_url}/api/v1/messages/message",
                     headers=self._get_headers(),
                     json={"id": message_id},
                     timeout=10.0,
@@ -90,10 +114,11 @@ class PostalClient:
             "sender_email", "bounce-bridge@fiszu.com"
         )
 
+        api_url, _ = self._get_config()
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    f"{self.api_url}/api/v1/send/message",
+                    f"{api_url}/api/v1/send/message",
                     headers=self._get_headers(),
                     json={
                         "to": [to],

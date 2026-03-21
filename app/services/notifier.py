@@ -98,9 +98,10 @@ async def send_chatwoot_note(
         logger.warning("Chatwoot not configured, skipping note")
         return False
 
-    # Get assigned agent
-    assignee_name = await chatwoot_client.get_assignee_name(account_id, conv_id)
-    mention = f"@{assignee_name}" if assignee_name else "@team"
+    # Get assigned agent mention handle
+    mention = await chatwoot_client.get_assignee_mention(account_id, conv_id)
+    if not mention:
+        mention = "@team"
 
     ts = timestamp or datetime.utcnow().isoformat()
     human_type = get_human_readable_type(event_type)

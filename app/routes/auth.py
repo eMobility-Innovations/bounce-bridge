@@ -4,7 +4,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-from ..auth import oauth, is_authenticated, get_current_user, is_user_allowed, KEYCLOAK_CLIENT_SECRET
+from ..auth import oauth, is_authenticated, get_current_user, is_user_allowed, KEYCLOAK_CLIENT_SECRET, KEYCLOAK_URL, KEYCLOAK_REALM, KEYCLOAK_CLIENT_ID
 from ..config import BASE_DIR
 
 logger = logging.getLogger(__name__)
@@ -57,14 +57,24 @@ async def auth_callback(request: Request):
 @router.get("/logout")
 async def logout(request: Request):
     """Clear session and redirect to Keycloak logout."""
+    from urllib.parse import urlencode
+
     request.session.clear()
 
     if not KEYCLOAK_CLIENT_SECRET:
         return RedirectResponse(url="/")
 
-    # Redirect to Keycloak logout
-    from ..auth import KEYCLOAK_URL, KEYCLOAK_REALM
-    logout_url = f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect/logout"
+    # Redirect to Keycloak logout with post-logout redirect
+    # Use https base URL for the redirect
+    base_url = str(request.base_url).rstrip("/")
+    if base_url.startswith("http://"):
+        base_url = base_url.replace("http://", "https://", 1)
+
+    params = urlencode({
+        "client_id": KEYCLOAK_CLIENT_ID,
+        "post_logout_redirect_uri": base_url,
+    })
+    logout_url = f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect/logout?{params}"
     return RedirectResponse(url=logout_url)
 
 
