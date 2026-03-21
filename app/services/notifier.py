@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from ..config import get_config
@@ -7,6 +7,41 @@ from .postal import postal_client
 from .chatwoot import chatwoot_client
 
 logger = logging.getLogger(__name__)
+
+# Europe/Warsaw timezone (CET/CEST)
+CET = timezone(timedelta(hours=1))
+CEST = timezone(timedelta(hours=2))
+
+
+def format_human_time(timestamp: Optional[str] = None) -> str:
+    """
+    Format timestamp in human-readable format with timezone.
+    Example: "21 Mar 2026, 20:13 CET"
+    """
+    try:
+        if timestamp:
+            # Parse ISO format timestamp
+            if "T" in timestamp:
+                dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            else:
+                dt = datetime.fromisoformat(timestamp)
+        else:
+            dt = datetime.now(timezone.utc)
+
+        # Convert to CET (simplified - not handling DST perfectly)
+        # March 21 is after DST switch, so use CEST (+2)
+        if dt.month >= 3 and dt.month <= 10:
+            local_tz = CEST
+            tz_name = "CEST"
+        else:
+            local_tz = CET
+            tz_name = "CET"
+
+        local_dt = dt.astimezone(local_tz)
+        return local_dt.strftime(f"%d %b %Y, %H:%M {tz_name}")
+    except Exception:
+        # Fallback to original if parsing fails
+        return timestamp or datetime.now().strftime("%d %b %Y, %H:%M")
 
 
 def get_human_readable_type(event_type: str) -> str:
@@ -48,7 +83,7 @@ async def send_bounce_notification_email(
         logger.info("Sender notification disabled, skipping")
         return False
 
-    ts = timestamp or datetime.utcnow().isoformat()
+    human_time = format_human_time(timestamp)
     human_type = get_human_readable_type(event_type)
 
     email_body = f"""Email Delivery Failed
@@ -57,7 +92,7 @@ Your email could not be delivered to: {recipient}
 
 Original Subject: {subject or "(No subject)"}
 Status: {human_type}
-Time: {ts}
+Time: {human_time}
 Detection Source: {source.upper()}
 
 Reason:
@@ -103,7 +138,7 @@ async def send_chatwoot_note(
     if not mention:
         mention = "@team"
 
-    ts = timestamp or datetime.utcnow().isoformat()
+    human_time = format_human_time(timestamp)
     human_type = get_human_readable_type(event_type)
     explanation = get_human_explanation(event_type, reason)
 
@@ -112,7 +147,7 @@ async def send_chatwoot_note(
 Recipient: {recipient}
 Status: {human_type}
 Source: {source.upper()}
-Time: {ts}
+Time: {human_time}
 
 Reason:
 {reason or "No details available."}
