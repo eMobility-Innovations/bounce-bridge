@@ -27,7 +27,6 @@ CREATE TABLE IF NOT EXISTS bounces (
 
 CREATE INDEX IF NOT EXISTS idx_bounces_timestamp ON bounces(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_bounces_recipient ON bounces(recipient);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_bounces_dedup ON bounces(dedup_key);
 """
 
 MIGRATIONS = [
