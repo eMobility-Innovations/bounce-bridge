@@ -10,11 +10,12 @@ from ..config import get_config
 
 logger = logging.getLogger(__name__)
 
-# Postal MariaDB connection settings
-POSTAL_DB_HOST = os.environ.get("POSTAL_DB_HOST", "192.168.103.200")
-POSTAL_DB_PORT = int(os.environ.get("POSTAL_DB_PORT", "3306"))
+# Postal MariaDB connection via SSH tunnel (mariadb-tunnel.service)
+# Tunnel: 127.0.0.1:3307 -> CT200 127.0.0.1:3306
+POSTAL_DB_HOST = os.environ.get("POSTAL_DB_HOST", "127.0.0.1")
+POSTAL_DB_PORT = int(os.environ.get("POSTAL_DB_PORT", "3307"))
 POSTAL_DB_USER = os.environ.get("POSTAL_DB_USER", "root")
-POSTAL_DB_PASSWORD = os.environ.get("POSTAL_DB_PASSWORD", "postal")
+POSTAL_DB_PASSWORD = os.environ.get("POSTAL_DB_PASSWORD", "")
 POSTAL_DB_NAME = os.environ.get("POSTAL_DB_NAME", "postal-server-1")
 
 # Suppression durations by type (days)
