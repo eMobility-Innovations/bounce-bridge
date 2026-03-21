@@ -1,7 +1,7 @@
 import aiosqlite
 import json
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from .config import DB_PATH
 from .models import BounceRecord
 
@@ -21,31 +21,69 @@ CREATE TABLE IF NOT EXISTS bounces (
     sender_notified INTEGER DEFAULT 0,
     reason TEXT DEFAULT '',
     raw_payload TEXT,
-    expiry_days INTEGER DEFAULT 30
+    expiry_days INTEGER DEFAULT 30,
+    dedup_key TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_bounces_timestamp ON bounces(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_bounces_recipient ON bounces(recipient);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bounces_dedup ON bounces(dedup_key);
 """
+
+MIGRATIONS = [
+    # Add dedup_key column and unique index for race condition prevention
+    (
+        "ALTER TABLE bounces ADD COLUMN dedup_key TEXT",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_bounces_dedup ON bounces(dedup_key)",
+    ),
+]
+
+
+def make_dedup_key(recipient: str, timestamp: str) -> str:
+    """Create a dedup key from recipient + minute-precision time bucket."""
+    try:
+        if "T" in timestamp:
+            dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        else:
+            dt = datetime.strptime(timestamp[:19], "%Y-%m-%d %H:%M:%S")
+        minute_bucket = dt.strftime("%Y%m%d%H%M")
+    except (ValueError, TypeError):
+        minute_bucket = datetime.utcnow().strftime("%Y%m%d%H%M")
+    return f"{recipient.lower().strip()}:{minute_bucket}"
 
 
 async def init_db():
-    """Initialize the database."""
+    """Initialize the database and run migrations."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.executescript(SCHEMA)
         await db.commit()
 
+        # Run migrations for existing databases
+        for migration in MIGRATIONS:
+            for stmt in migration:
+                try:
+                    await db.execute(stmt)
+                except Exception:
+                    pass  # Column/index already exists
+            await db.commit()
 
-async def save_bounce(record: BounceRecord) -> int:
-    """Save a bounce record to the database."""
+
+async def save_bounce(record: BounceRecord) -> Optional[int]:
+    """Save a bounce record to the database.
+
+    Uses INSERT OR IGNORE with a dedup_key (recipient + minute bucket)
+    to prevent duplicates at the DB level even under concurrent writes.
+    Returns the row ID on success, or None if a duplicate was ignored.
+    """
+    dedup_key = make_dedup_key(record.recipient, record.timestamp)
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             """
-            INSERT INTO bounces (
+            INSERT OR IGNORE INTO bounces (
                 timestamp, source, event_type, recipient, sender, subject,
                 conv_id, account_id, chatwoot_notified, postal_suppressed,
-                sender_notified, reason, raw_payload, expiry_days
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                sender_notified, reason, raw_payload, expiry_days, dedup_key
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 record.timestamp,
@@ -62,9 +100,12 @@ async def save_bounce(record: BounceRecord) -> int:
                 record.reason,
                 record.raw_payload,
                 record.expiry_days,
+                dedup_key,
             ),
         )
         await db.commit()
+        if cursor.lastrowid == 0:
+            return None  # Duplicate, INSERT was ignored
         return cursor.lastrowid
 
 

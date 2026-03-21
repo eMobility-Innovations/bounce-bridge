@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Optional
 from datetime import datetime
@@ -9,6 +10,19 @@ from .postal import postal_client
 from .notifier import send_bounce_notification_email, send_chatwoot_note
 
 logger = logging.getLogger(__name__)
+
+# In-memory locks keyed by recipient to prevent concurrent processing
+_recipient_locks: dict[str, asyncio.Lock] = {}
+_locks_lock = asyncio.Lock()
+
+
+async def _get_recipient_lock(recipient: str) -> asyncio.Lock:
+    """Get or create a per-recipient asyncio lock."""
+    key = recipient.lower().strip()
+    async with _locks_lock:
+        if key not in _recipient_locks:
+            _recipient_locks[key] = asyncio.Lock()
+        return _recipient_locks[key]
 
 
 def get_expiry_days(source: str, event_type: str) -> int:
@@ -57,6 +71,29 @@ async def process_bounce(
 
     Returns None if duplicate found (skipped).
     """
+    lock = await _get_recipient_lock(recipient)
+    async with lock:
+        return await _process_bounce_locked(
+            source=source, event_type=event_type, recipient=recipient,
+            sender=sender, subject=subject, reason=reason,
+            account_id=account_id, conv_id=conv_id,
+            raw_payload=raw_payload, timestamp=timestamp,
+        )
+
+
+async def _process_bounce_locked(
+    source: str,
+    event_type: str,
+    recipient: str,
+    sender: Optional[str] = None,
+    subject: Optional[str] = None,
+    reason: str = "",
+    account_id: Optional[str] = None,
+    conv_id: Optional[str] = None,
+    raw_payload: Optional[str] = None,
+    timestamp: Optional[str] = None,
+) -> Optional[BounceRecord]:
+    """Inner bounce processing, called under per-recipient lock."""
     config = get_config()
     ts = timestamp or datetime.utcnow().isoformat()
     expiry_days = get_expiry_days(source, event_type)
@@ -82,8 +119,11 @@ async def process_bounce(
         expiry_days=expiry_days,
     )
 
-    # Save to database
+    # Save to database (INSERT OR IGNORE — returns None if dedup_key collision)
     bounce_id = await database.save_bounce(record)
+    if bounce_id is None:
+        logger.info(f"Duplicate bounce for {recipient} caught by DB constraint, skipping")
+        return None
     record.id = bounce_id
     logger.info(f"Saved bounce {bounce_id}: {recipient} ({event_type}) from {source}")
 
