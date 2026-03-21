@@ -11,11 +11,11 @@ Bounce Bridge receives bounce and complaint notifications from multiple sources 
 
 ## Sources
 
-| Source | Webhook Endpoint |
-|--------|------------------|
-| AWS SES (via n8n) | `POST /api/v1/ses-bounce` |
-| Postal | `POST /api/v1/postal-bounce` |
-| Postfix | `POST /api/v1/postfix-bounce` |
+| Source | Webhook Endpoint | Notes |
+|--------|------------------|-------|
+| AWS SES | `POST /api/v1/ses-bounce` | Via n8n or direct SNS |
+| Postal | `POST /api/v1/postal-bounce` | Postal webhook |
+| Postfix | `POST /api/v1/postfix-bounce` | Via [postfix-bounce-monitor](https://github.com/eMobility-Innovations/postfix-bounce-monitor) |
 
 ## Suppression Expiry
 
@@ -59,18 +59,13 @@ systemctl enable bounce-bridge
 systemctl start bounce-bridge
 ```
 
-### Postfix Hook (on CT200)
+### Postfix Hook (Companion Service)
 
-```bash
-# Copy the hook script
-cp /opt/bounce-bridge/postfix/postfix-bounce-hook.py /opt/
-chmod +x /opt/postfix-bounce-hook.py
+Postfix DSN detection is handled by a separate companion service:
 
-# Add to crontab to run every minute
-echo "* * * * * root /opt/postfix-bounce-hook.py >> /var/log/postfix-bounce-hook.log 2>&1" > /etc/cron.d/postfix-bounce-hook
+**[postfix-bounce-monitor](https://github.com/eMobility-Innovations/postfix-bounce-monitor)**
 
-# Or run in watch mode as a service (see postfix-bounce-hook.service)
-```
+This service monitors Postfix mail.log for bounce notifications and forwards them to Bounce Bridge's `/api/v1/postfix-bounce` endpoint. See the companion repo for installation instructions.
 
 ## Configuration
 
