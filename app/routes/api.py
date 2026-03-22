@@ -148,21 +148,26 @@ async def ses_bounce(request: Request):
 @router.post("/postal-bounce")
 async def postal_bounce(request: Request):
     """
-    Receive Postal MessageBounced webhook.
+    Receive Postal webhook events: MessageBounced, MessageDeliveryFailed, MessageHeld.
 
-    Must fetch original message headers from Postal API to extract conv ID.
+    MessageHeld with "suppression" in details triggers a Chatwoot notification
+    explaining the recipient is suppressed and the email was NOT sent.
     """
     try:
         payload = await request.json()
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
 
-    logger.info(f"Received Postal bounce webhook")
-
-    # Postal webhook payload structure
     event = payload.get("event", "")
     message_data = payload.get("payload", payload)
 
+    logger.info(f"Received Postal webhook: {event}")
+
+    # ── MessageHeld — suppressed recipient notification ──
+    if event == "MessageHeld":
+        return await _handle_message_held(message_data, payload)
+
+    # ── MessageBounced / MessageDeliveryFailed — bounce processing ──
     if event not in ("MessageBounced", "MessageDeliveryFailed"):
         return {"status": "ignored", "message": f"Event {event} not handled"}
 
@@ -172,17 +177,14 @@ async def postal_bounce(request: Request):
     message_id = message_data.get("id", message_data.get("message_id"))
     reason = message_data.get("details", message_data.get("output", ""))
 
-    # Try to get original message headers for conv ID
     account_id = None
     conv_id = None
-    html_body = None
 
     if message_id:
         msg_details = await postal_client.get_message(message_id)
         if msg_details:
             headers = msg_details.get("headers", {})
             html_body = msg_details.get("html_body", "")
-
             conv_info = extract_conv_id(headers=headers, html_body=html_body)
             if conv_info:
                 account_id, conv_id = conv_info
@@ -200,6 +202,72 @@ async def postal_bounce(request: Request):
     )
 
     return {"status": "ok", "message": "Postal bounce processed"}
+
+
+async def _handle_message_held(message_data: dict, raw_payload: dict):
+    """Handle MessageHeld event — notify Chatwoot if recipient is suppressed."""
+    from ..services.notifier import send_held_chatwoot_note
+
+    details = message_data.get("details", message_data.get("output", ""))
+
+    # Only handle suppression holds
+    if "suppression" not in details.lower():
+        logger.info(f"MessageHeld ignored — not suppression-related: {details[:100]}")
+        return {"status": "ignored", "message": "Not suppression-related hold"}
+
+    recipient = message_data.get("rcpt_to", message_data.get("to", ""))
+    sender = message_data.get("mail_from", message_data.get("from", ""))
+    subject = message_data.get("subject", "")
+    message_id = message_data.get("id", message_data.get("message_id"))
+
+    logger.info(f"MessageHeld — suppressed recipient: {recipient}")
+
+    # Look up suppression record from Postal DB
+    suppression = await postal_client.lookup_suppression(recipient)
+
+    # Try to get conv_id from message headers
+    account_id = None
+    conv_id = None
+
+    if message_id:
+        msg_details = await postal_client.get_message(message_id)
+        if msg_details:
+            headers = msg_details.get("headers", {})
+            html_body = msg_details.get("html_body", "")
+            conv_info = extract_conv_id(headers=headers, html_body=html_body)
+            if conv_info:
+                account_id, conv_id = conv_info
+
+    # Log blocked attempt to bounce-bridge DB
+    from datetime import datetime
+    ts = datetime.utcnow().isoformat()
+    supp_type = suppression.get("type", "Unknown") if suppression else "Unknown"
+    supp_reason = suppression.get("reason", "") if suppression else ""
+
+    chatwoot_notified = False
+
+    # Send Chatwoot note if we have conv_id and suppression info
+    if account_id and conv_id and suppression:
+        chatwoot_notified = await send_held_chatwoot_note(
+            account_id=account_id,
+            conv_id=conv_id,
+            recipient=recipient,
+            suppression=suppression,
+        )
+
+    # Save blocked attempt record
+    await database.save_blocked_attempt(
+        recipient=recipient,
+        sender=sender,
+        subject=subject,
+        reason=f"{supp_type}: {supp_reason}",
+        account_id=account_id,
+        conv_id=conv_id,
+        chatwoot_notified=chatwoot_notified,
+        raw_payload=json.dumps(raw_payload),
+    )
+
+    return {"status": "ok", "message": f"Held notification processed for {recipient}"}
 
 
 @router.post("/postfix-bounce")

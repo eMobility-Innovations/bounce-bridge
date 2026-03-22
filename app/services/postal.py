@@ -114,6 +114,32 @@ class PostalClient:
             logger.error(f"Failed to add suppression for {address}: {e}")
             return False
 
+    async def lookup_suppression(self, address: str) -> Optional[dict]:
+        """Look up suppression record for an address from Postal MariaDB."""
+        try:
+            conn = _get_postal_db()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT type, address, reason, timestamp, keep_until "
+                "FROM suppressions WHERE address = %s "
+                "ORDER BY timestamp DESC LIMIT 1",
+                (address,),
+            )
+            row = cursor.fetchone()
+            conn.close()
+            if row:
+                return {
+                    "type": row["type"],
+                    "address": row["address"],
+                    "reason": row["reason"],
+                    "timestamp": float(row["timestamp"]),
+                    "keep_until": float(row["keep_until"]),
+                }
+            return None
+        except Exception as e:
+            logger.error(f"Failed to lookup suppression for {address}: {e}")
+            return None
+
     async def get_message(self, message_id: int) -> Optional[dict]:
         """Get message details from Postal API."""
         if not self.is_configured():

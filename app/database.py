@@ -35,6 +35,10 @@ MIGRATIONS = [
         "ALTER TABLE bounces ADD COLUMN dedup_key TEXT",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_bounces_dedup ON bounces(dedup_key)",
     ),
+    # Track blocked send attempts (suppressed recipients)
+    (
+        "ALTER TABLE bounces ADD COLUMN blocked_attempt INTEGER DEFAULT 0",
+    ),
 ]
 
 
@@ -216,3 +220,34 @@ async def find_recent_bounce(recipient: str, hours: int = 24) -> Optional[dict]:
         )
         row = await cursor.fetchone()
         return dict(row) if row else None
+
+
+async def save_blocked_attempt(
+    recipient: str,
+    sender: str = "",
+    subject: str = "",
+    reason: str = "",
+    account_id: Optional[str] = None,
+    conv_id: Optional[str] = None,
+    chatwoot_notified: bool = False,
+    raw_payload: Optional[str] = None,
+) -> Optional[int]:
+    """Save a blocked send attempt (suppressed recipient) to the database."""
+    ts = datetime.utcnow().isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            """
+            INSERT INTO bounces (
+                timestamp, source, event_type, recipient, sender, subject,
+                conv_id, account_id, chatwoot_notified, postal_suppressed,
+                sender_notified, reason, raw_payload, expiry_days, blocked_attempt
+            ) VALUES (?, 'postal', 'blocked_attempt', ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, 0, 1)
+            """,
+            (
+                ts, recipient, sender, subject,
+                conv_id, account_id, int(chatwoot_notified),
+                reason, raw_payload,
+            ),
+        )
+        await db.commit()
+        return cursor.lastrowid
