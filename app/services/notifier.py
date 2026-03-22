@@ -225,3 +225,49 @@ This email was **NOT sent** to `{recipient}` because their address is on our sup
 {mention}"""
 
     return await chatwoot_client.add_private_note(account_id, conv_id, note)
+
+
+async def send_held_sender_email(
+    recipient: str,
+    sender: str,
+    subject: str,
+    suppression: Optional[dict] = None,
+) -> bool:
+    """Send notification email to original sender when their email was held (suppressed)."""
+    from datetime import datetime as dt
+
+    supp_type = suppression.get("type", "Unknown") if suppression else "Unknown"
+    reason = suppression.get("reason", "") if suppression else ""
+    until_ts = suppression.get("keep_until", 0) if suppression else 0
+    until_str = format_human_time(dt.fromtimestamp(until_ts, tz=timezone.utc).isoformat()) if until_ts else "Unknown"
+
+    if "complaint" in reason.lower():
+        explanation = "This recipient previously marked our email as spam."
+    elif "bounce" in reason.lower() or "hard" in reason.lower():
+        explanation = "A previous email to this address was permanently rejected. The address may not exist or may be disabled."
+    else:
+        explanation = "This address has been suppressed due to delivery issues."
+
+    body = f"""Email Not Delivered — Recipient Suppressed
+
+Your email could not be delivered to: {recipient}
+
+Original Subject: {subject or "(No subject)"}
+
+Reason:
+{explanation}
+{f"Details: {reason}" if reason else ""}
+
+This address is suppressed until: {until_str}
+
+We recommend contacting this customer directly by phone instead of email.
+
+---
+This is an automated message from Bounce Bridge.
+"""
+
+    return await postal_client.send_email(
+        to=sender,
+        subject=f"Not delivered — {recipient} is suppressed",
+        body=body,
+    )

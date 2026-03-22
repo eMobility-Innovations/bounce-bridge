@@ -252,8 +252,9 @@ async def postal_bounce(request: Request):
 
 
 async def _handle_message_held(message_data: dict, raw_payload: dict):
-    """Handle MessageHeld event — notify Chatwoot if recipient is suppressed."""
-    from ..services.notifier import send_held_chatwoot_note
+    """Handle MessageHeld event — notify sender and Chatwoot when recipient is suppressed."""
+    from ..services.notifier import send_held_chatwoot_note, send_held_sender_email
+    from ..config import get_config
 
     details = message_data.get("details", message_data.get("output", ""))
 
@@ -286,21 +287,33 @@ async def _handle_message_held(message_data: dict, raw_payload: dict):
             conv_info = extract_conv_id(headers=headers, html_body=html_body)
             if conv_info:
                 account_id, conv_id = conv_info
+            # Use From header for human sender
+            from_header = _extract_email(headers.get("From", ""))
+            if from_header and not _is_return_path_token(from_header):
+                sender = from_header
 
-    # Log blocked attempt to bounce-bridge DB
-    from datetime import datetime
-    ts = datetime.utcnow().isoformat()
     supp_type = suppression.get("type", "Unknown") if suppression else "Unknown"
     supp_reason = suppression.get("reason", "") if suppression else ""
 
     chatwoot_notified = False
+    sender_notified = False
 
-    # Send Chatwoot note if we have conv_id and suppression info
+    # Send Chatwoot note if we have conv_id
     if account_id and conv_id and suppression:
         chatwoot_notified = await send_held_chatwoot_note(
             account_id=account_id,
             conv_id=conv_id,
             recipient=recipient,
+            suppression=suppression,
+        )
+
+    # Send notification email to original sender
+    config = get_config()
+    if sender and not _is_return_path_token(sender) and config.get("notifications", {}).get("enable_sender_notify", True):
+        sender_notified = await send_held_sender_email(
+            recipient=recipient,
+            sender=sender,
+            subject=subject,
             suppression=suppression,
         )
 
