@@ -147,6 +147,45 @@ class PostalClient:
             logger.error(f"Failed to lookup suppression for {address}: {e}")
             return None
 
+    async def cancel_hold(self, message_id: int) -> bool:
+        """Cancel a held message in Postal via direct MariaDB update.
+        Replicates Postal's cancel_hold: sets status=HoldCancelled, held=0,
+        and inserts a delivery record."""
+        try:
+            conn = _get_postal_db()
+            cursor = conn.cursor()
+            now = time.time()
+
+            # Insert delivery record
+            cursor.execute(
+                "INSERT INTO deliveries (message_id, status, details, timestamp) "
+                "VALUES (%s, %s, %s, %s)",
+                (message_id, "HoldCancelled",
+                 "Automatically cancelled by Bounce Bridge — recipient is on suppression list.",
+                 now),
+            )
+
+            # Update message status
+            cursor.execute(
+                "UPDATE messages SET status = %s, held = 0, hold_expiry = NULL, "
+                "last_delivery_attempt = %s WHERE id = %s AND status = 'Held'",
+                ("HoldCancelled", now, message_id),
+            )
+
+            conn.commit()
+            updated = cursor.rowcount
+            conn.close()
+
+            if updated:
+                logger.info(f"Cancelled hold on message {message_id}")
+            else:
+                logger.info(f"Message {message_id} was not in Held status, skipping cancel")
+            return updated > 0
+
+        except Exception as e:
+            logger.error(f"Failed to cancel hold on message {message_id}: {e}")
+            return False
+
     async def get_message(self, message_id: int) -> Optional[dict]:
         """Get message details from Postal API."""
         if not self.is_configured():

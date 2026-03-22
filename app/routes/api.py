@@ -317,6 +317,11 @@ async def _handle_message_held(message_data: dict, raw_payload: dict):
             suppression=suppression,
         )
 
+    # Cancel the hold so Postal doesn't release it after 7 days
+    hold_cancelled = False
+    if message_id:
+        hold_cancelled = await postal_client.cancel_hold(message_id)
+
     # Save blocked attempt record
     await database.save_blocked_attempt(
         recipient=recipient,
@@ -329,7 +334,7 @@ async def _handle_message_held(message_data: dict, raw_payload: dict):
         raw_payload=json.dumps(raw_payload),
     )
 
-    return {"status": "ok", "message": f"Held notification processed for {recipient}"}
+    return {"status": "ok", "message": f"Held message {message_id} cancelled for {recipient}", "cancelled": hold_cancelled}
 
 
 @router.post("/postfix-bounce")
