@@ -262,10 +262,12 @@ async def _handle_message_held(message_data: dict, raw_payload: dict):
         logger.info(f"MessageHeld ignored — not suppression-related: {details[:100]}")
         return {"status": "ignored", "message": "Not suppression-related hold"}
 
-    recipient = message_data.get("rcpt_to", message_data.get("to", ""))
-    sender = message_data.get("mail_from", message_data.get("from", ""))
-    subject = message_data.get("subject", "")
-    message_id = message_data.get("id", message_data.get("message_id"))
+    # MessageHeld payload nests message fields under "message" key
+    msg = message_data.get("message", message_data)
+    recipient = msg.get("to", msg.get("rcpt_to", ""))
+    sender = msg.get("from", msg.get("mail_from", ""))
+    subject = msg.get("subject", "")
+    message_id = msg.get("id", msg.get("message_id"))
 
     logger.info(f"MessageHeld — suppressed recipient: {recipient}")
 
