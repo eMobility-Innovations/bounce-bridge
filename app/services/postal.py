@@ -68,23 +68,30 @@ class PostalClient:
     ) -> bool:
         """Add an address to Postal's suppression list via direct MariaDB insert.
 
-        Valid types: HardBounce, Complaint
+        CRITICAL: Postal checks suppressions with type="recipient" only.
+        We insert with type="recipient" so Postal holds future messages.
+        We also store the original bounce type in the reason field.
+        Address is lowercased for consistent matching.
         """
-        if suppression_type not in ("HardBounce", "Complaint"):
-            suppression_type = "HardBounce"
+        # Postal only checks type="recipient" in hold_if_recipient_on_suppression_list
+        postal_type = "recipient"
+        address = address.lower().strip()
 
         now = time.time()
         days = SUPPRESSION_DAYS.get(suppression_type, 365)
         keep_until = now + (days * 86400)
 
+        # Include original bounce type in reason for reference
+        full_reason = f"{reason} ({suppression_type})"
+
         try:
             conn = _get_postal_db()
             cursor = conn.cursor()
 
-            # Check if suppression already exists for this address + type
+            # Check if suppression already exists
             cursor.execute(
                 "SELECT id, keep_until FROM suppressions WHERE address = %s AND type = %s",
-                (address, suppression_type),
+                (address, postal_type),
             )
             existing = cursor.fetchone()
 
@@ -92,20 +99,20 @@ class PostalClient:
                 if keep_until > float(existing["keep_until"]):
                     cursor.execute(
                         "UPDATE suppressions SET keep_until = %s, reason = %s, timestamp = %s WHERE id = %s",
-                        (keep_until, reason, now, existing["id"]),
+                        (keep_until, full_reason, now, existing["id"]),
                     )
                     conn.commit()
-                    logger.info(f"Updated suppression for {address} ({suppression_type}), extended to {days}d")
+                    logger.info(f"Updated suppression for {address} (recipient/{suppression_type}), extended to {days}d")
                 else:
-                    logger.info(f"Suppression already exists for {address} ({suppression_type}), no update needed")
+                    logger.info(f"Suppression already exists for {address}, no update needed")
             else:
                 cursor.execute(
                     "INSERT INTO suppressions (type, address, reason, timestamp, keep_until) "
                     "VALUES (%s, %s, %s, %s, %s)",
-                    (suppression_type, address, reason, now, keep_until),
+                    (postal_type, address, full_reason, now, keep_until),
                 )
                 conn.commit()
-                logger.info(f"Added suppression for {address} ({suppression_type}) for {days} days")
+                logger.info(f"Added suppression for {address} (recipient/{suppression_type}) for {days} days")
 
             conn.close()
             return True
@@ -121,7 +128,7 @@ class PostalClient:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT type, address, reason, timestamp, keep_until "
-                "FROM suppressions WHERE address = %s "
+                "FROM suppressions WHERE LOWER(address) = LOWER(%s) "
                 "ORDER BY timestamp DESC LIMIT 1",
                 (address,),
             )
