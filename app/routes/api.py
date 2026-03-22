@@ -92,6 +92,17 @@ async def ses_bounce(request: Request):
 
     notification_type = message.get("notificationType", message.get("eventType", ""))
 
+    # Early loop detection — skip bounce notifications for our own emails
+    mail_data_check = message.get("mail", {})
+    source_addr = mail_data_check.get("source", "")
+    common_subj = mail_data_check.get("commonHeaders", {}).get("subject", "")
+    if source_addr.lower() in ("bounce-bridge@fiszu.com", "noreply-bouncebridge@fiszu.com"):
+        logger.info(f"Skipped SES bounce — our own notification email bounced: {source_addr}")
+        return {"status": "skipped", "message": "Bounce of own notification email"}
+    if common_subj.lower().startswith("delivery failed:"):
+        logger.info(f"Skipped SES bounce — bounce notification bounce: {common_subj[:60]}")
+        return {"status": "skipped", "message": "Bounce of bounce notification"}
+
     if notification_type == "Bounce":
         bounce_data = message.get("bounce", {})
         bounce_type = bounce_data.get("bounceType", "Permanent")

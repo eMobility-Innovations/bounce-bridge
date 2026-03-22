@@ -81,6 +81,36 @@ async def process_bounce(
         )
 
 
+def _is_bounce_loop(sender: Optional[str], recipient: str, subject: Optional[str]) -> bool:
+    """Detect bounce notification loops to prevent infinite recursion."""
+    subj = (subject or "").lower()
+    sndr = (sender or "").lower()
+
+    # Nested "Delivery failed:" = bounce of a bounce notification
+    if "delivery failed: delivery failed:" in subj:
+        return True
+
+    # Subject starts with our notification prefix
+    if subj.startswith("delivery failed:"):
+        return True
+
+    # Sender or recipient is bounce-bridge's own address
+    bounce_addresses = {"bounce-bridge@fiszu.com", "noreply-bouncebridge@fiszu.com"}
+    if sndr in bounce_addresses or recipient.lower() in bounce_addresses:
+        return True
+
+    # Sender is a return path token
+    import re
+    if re.match(r'^[a-z0-9]{5,10}@psrp\.', sndr):
+        return True
+
+    # Sender == recipient (self-bounce)
+    if sndr and sndr == recipient.lower():
+        return True
+
+    return False
+
+
 async def _process_bounce_locked(
     source: str,
     event_type: str,
@@ -94,6 +124,11 @@ async def _process_bounce_locked(
     timestamp: Optional[str] = None,
 ) -> Optional[BounceRecord]:
     """Inner bounce processing, called under per-recipient lock."""
+    # Loop detection — skip bounce-of-bounce-notification entirely
+    if _is_bounce_loop(sender, recipient, subject):
+        logger.info(f"Skipped bounce loop: sender={sender} recipient={recipient} subject={(subject or '')[:60]}")
+        return None
+
     config = get_config()
     ts = timestamp or datetime.utcnow().isoformat()
     expiry_days = get_expiry_days(source, event_type)
