@@ -18,6 +18,25 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["api"])
 
+import re
+
+def _extract_email(value: str) -> str:
+    """Extract bare email from 'Name <email>' or plain email string."""
+    if not value:
+        return ""
+    match = re.search(r'<([^>]+)>', value)
+    if match:
+        return match.group(1).strip()
+    return value.strip()
+
+
+def _is_return_path_token(email: str) -> bool:
+    """Check if an email is a Postal return path token, not a human address.
+    Matches patterns like fvkuyb@psrp.escooterclinic.co.uk"""
+    if not email:
+        return True
+    return bool(re.match(r'^[a-z0-9]{5,10}@psrp\.', email, re.IGNORECASE))
+
 
 @router.get("/health", response_model=HealthResponse)
 async def health_check():
@@ -86,7 +105,14 @@ async def ses_bounce(request: Request):
         for h in mail_data.get("headers", []):
             headers[h.get("name", "")] = h.get("value", "")
 
-        sender = mail_data.get("source", "")
+        # Human sender: prefer commonHeaders.from (display name + email),
+        # then From header, last resort envelope source (may be return path token)
+        common_from = mail_data.get("commonHeaders", {}).get("from", [])
+        sender = _extract_email(common_from[0]) if common_from else ""
+        if not sender or _is_return_path_token(sender):
+            sender = _extract_email(headers.get("From", ""))
+        if not sender or _is_return_path_token(sender):
+            sender = mail_data.get("source", "")
         subject = headers.get("Subject", "")
 
         # Extract conversation ID
@@ -119,7 +145,13 @@ async def ses_bounce(request: Request):
         for h in mail_data.get("headers", []):
             headers[h.get("name", "")] = h.get("value", "")
 
-        sender = mail_data.get("source", "")
+        # Human sender (same logic as bounce)
+        common_from = mail_data.get("commonHeaders", {}).get("from", [])
+        sender = _extract_email(common_from[0]) if common_from else ""
+        if not sender or _is_return_path_token(sender):
+            sender = _extract_email(headers.get("From", ""))
+        if not sender or _is_return_path_token(sender):
+            sender = mail_data.get("source", "")
         subject = headers.get("Subject", "")
 
         conv_info = extract_conv_id(headers=headers)
@@ -188,6 +220,10 @@ async def postal_bounce(request: Request):
             conv_info = extract_conv_id(headers=headers, html_body=html_body)
             if conv_info:
                 account_id, conv_id = conv_info
+            # Use From header as human sender instead of envelope mail_from
+            from_header = _extract_email(headers.get("From", ""))
+            if from_header and not _is_return_path_token(from_header):
+                sender = from_header
 
     await process_bounce(
         source="postal",

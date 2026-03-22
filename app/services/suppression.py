@@ -137,8 +137,10 @@ async def _process_bounce_locked(
             record.postal_suppressed = True
             await database.update_bounce(bounce_id, postal_suppressed=True)
 
-    # Send notification email to sender
-    if sender and config.get("notifications", {}).get("enable_sender_notify", True):
+    # Send notification email to sender (skip return path tokens to prevent loops)
+    import re
+    is_token = bool(re.match(r'^[a-z0-9]{5,10}@psrp\.', sender or "", re.IGNORECASE))
+    if sender and not is_token and config.get("notifications", {}).get("enable_sender_notify", True):
         notified = await send_bounce_notification_email(
             recipient=recipient,
             sender=sender,
